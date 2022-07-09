@@ -1,88 +1,135 @@
-import axios from 'axios'
-import { config } from 'dotenv'
-import express from 'express'
-import { GoogleSpreadsheet } from 'google-spreadsheet'
+const TelegramBot = require('node-telegram-bot-api');
+// const sequelize = require('./db')
+const UserQuestionsModel = require('./models')
+const { funnyQuestions } = require('./questions/funnyQuestions')
+const { acquaintanceQuestions } = require('./questions/acquaintanceQuestions')
+const { forCouplesQuestions } = require('./questions/forCouplesQuestions')
+const { philosophicalQuestions } = require('./questions/philosophicalQuestions')
 
-config()
-const app = express()
+require('dotenv').config();
 
-const JOKE_API = 'https://v2.jokeapi.dev/joke/Programming?type=single'
-const TELEGRAM_URI = `https://api.telegram.org/bot${process.env.TELEGRAM_API_TOKEN}/sendMessage`
+const bot = new TelegramBot(process.env.TELEGRAM_API_TOKEN, { polling: true });
+let LAST_CATEGORY = 'funny';
+const questions = {
+    funny: {
+        data: funnyQuestions,
+        emoji: '🕺',
+        title: '🕺 Забавные',
+    },
+    forCouples: {
+        data: forCouplesQuestions,
+        emoji: '👩‍❤️‍💋‍👨',
+        title: '👩‍❤️‍💋‍👨 Для парочек',
+    },
+    acquaintance: {
+        data: acquaintanceQuestions,
+        emoji: '🙋',
+        title: '🙋 Для знакомства',
+    },
+    philosophical: {
+        data: philosophicalQuestions,
+        emoji: '🗣',
+        title: '🗣 Философские',
+    },
+}
 
-app.use(express.json())
-app.use(
-  express.urlencoded({
-    extended: true
-  })
-)
+const getKeyboardElement = (type) => ({ text: questions[type].title, callback_data: type })
 
-app.use(express.json())
-app.use(
-  express.urlencoded({
-    extended: true
-  })
-)
+const questionTypeOptions = {
+    reply_markup: JSON.stringify({
+        inline_keyboard: [
+            [
+                getKeyboardElement('funny'),
+                getKeyboardElement('philosophical'),
 
-const doc = new GoogleSpreadsheet(process.env.GOOGLE_SPREADSHEET_ID)
-await doc.useServiceAccountAuth({
-  client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-  private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n')
-})
-
-app.post('/new-message', async (req, res) => {
-  const { message } = req.body
-
-  const messageText = message?.text?.toLowerCase()?.trim()
-  const chatId = message?.chat?.id
-  if (!messageText || !chatId) {
-    return res.sendStatus(400)
-  }
-
-  // local json
-  // const dataFromJson = fs.readJSONSync(join(process.cwd(), 'todos.json'))
-
-  // google spreadsheet
-  await doc.loadInfo()
-  const sheet = doc.sheetsByIndex[0]
-  const rows = await sheet.getRows()
-  const dataFromSpreadsheet = rows.reduce((obj, row) => {
-    if (row.date) {
-      const todo = { text: row.text, done: row.done }
-      obj[row.date] = obj[row.date] ? [...obj[row.date], todo] : [todo]
-    }
-    return obj
-  }, {})
-
-  let responseText = 'I have nothing to say.'
-  // generate responseText
-  if (messageText === 'joke') {
-    try {
-      const response = await axios(JOKE_API)
-      responseText = response.data.joke
-    } catch (e) {
-      console.log(e)
-      res.send(e)
-    }
-  } else if (/\d\d\.\d\d/.test(messageText)) {
-    // responseText = dataFromJson[messageText] || 'You have nothing to do on this day.'
-    responseText =
-      dataFromSpreadsheet[messageText] || 'You have nothing to do on this day.'
-  }
-
-  // send response
-  try {
-    await axios.post(TELEGRAM_URI, {
-      chat_id: chatId,
-      text: responseText
+            ],
+            [
+                getKeyboardElement('acquaintance'),
+                getKeyboardElement('forCouples'),
+            ],
+            [
+                { text: '🎲', callback_data: 'random' },
+            ]
+        ]
     })
-    res.send('Done')
-  } catch (e) {
-    console.log(e)
-    res.send(e)
-  }
-})
+}
 
-const PORT = process.env.PORT || 3000
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`)
-})
+const afterQuestionOptions = {
+    reply_markup: JSON.stringify({
+        inline_keyboard: [
+            [
+                { text: 'Сменить категорию', callback_data: 'change_category' },
+                { text: 'Еще', callback_data: 'more' }
+            
+            ],
+            [
+                { text: '🎲', callback_data: 'random' },
+            ]
+        ]
+    })
+}
+
+const randomFunc = (data) => {
+    return Math.floor(Math.random() * data.length)
+}
+
+const randomCategory = () =>  Object.keys(questions)[randomFunc(Object.keys(questions))]
+
+const chooseQuestion = (type) => {
+    const data = questions[type].data
+    return `${questions[type].emoji} ${data[randomFunc(data)].ru}`
+}
+
+const checkToValidCategory = (dataForCheck) => {
+    return Object.keys(questions).includes(dataForCheck);
+}
+
+const start = async () => {
+
+    // try {
+    //     await sequelize.authenticate()
+    //     await sequelize.sync()
+    // } catch (error) {
+    //     console.log(error)
+    // }
+
+    bot.setMyCommands([
+        { command: '/start', description: 'Поехали' },
+        { command: '/question', description: 'Хочу вопрос' },
+        // { command: '/add', description: 'Добавить свой вопрос' },
+    ])
+
+    bot.onText(/\/start/, async msg => {
+        await bot.sendMessage(msg.chat.id, "Привет 👋, я бот для интересных посиделок с друзьями, выбери категорию вопроса 👇", questionTypeOptions);
+    })
+    bot.onText(/\/question/, async msg => {
+        await bot.sendMessage(msg.chat.id, "Выберите категорию вопроса 👇", questionTypeOptions);
+    })
+    bot.onText(/\/add/, async msg => {
+        const chatId = msg.chat.id;
+        await UserQuestionsModel.create({ chatId }); // подумать, залупа какая-то (создавать по айди чата)
+        await bot.sendMessage(chatId, "Пожалуйста, напишите свой собественный вопрос, он будет во вкладке 'Вопросы пользователей'");
+    })
+    bot.on('callback_query', async msg => {
+        const data = msg.data;
+        const chatId = msg.message.chat.id;
+
+        if (checkToValidCategory(data)) {
+            LAST_CATEGORY = data;
+            return bot.sendMessage(chatId, chooseQuestion(data), afterQuestionOptions)
+        }
+        if (data === 'more') {
+            if (LAST_CATEGORY === 'random') LAST_CATEGORY = randomCategory()
+            return bot.sendMessage(chatId, chooseQuestion(LAST_CATEGORY), afterQuestionOptions)
+        }
+        if (data === 'change_category') {
+            return bot.sendMessage(chatId, "Выберите категорию вопроса", questionTypeOptions);
+        }
+        if (data === 'random') {
+            LAST_CATEGORY = 'random';
+            return bot.sendMessage(chatId, chooseQuestion(randomCategory()), afterQuestionOptions)
+        }
+    })
+}
+
+start();
